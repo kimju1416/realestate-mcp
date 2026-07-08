@@ -7,6 +7,7 @@
  *      보내, 키가 없어도 서버가 죽지 않고 안내 메시지를 돌려주는지 확인한다 (nonpay-mcp와 동일 패턴).
  */
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveRegion } from "../lawd-codes.js";
@@ -221,14 +222,22 @@ try {
 
   const list = await rpc("tools/list", {});
   const tools = list.result?.tools ?? [];
-  check("tools/list 도구 3개", tools.length === 3, tools.map((t) => t.name).join(", "));
+  check("tools/list 도구 7개", tools.length === 7, tools.map((t) => t.name).join(", "));
 
   const call = await rpc("tools/call", {
     name: "search_apartment_trades",
     arguments: { region: "강남구", dealMonth: "202506" },
   });
   const text = call.result?.content?.[0]?.text ?? "";
-  const hasKey = !!(process.env.REALESTATE_API_KEY?.trim());
+  const keyFileHasContent = (() => {
+    try {
+      const k = readFileSync(join(__dirname, "..", "key.txt"), "utf8").trim();
+      return !!k && !k.startsWith("여기에");
+    } catch {
+      return false;
+    }
+  })();
+  const hasKey = !!(process.env.REALESTATE_API_KEY?.trim()) || keyFileHasContent;
   if (hasKey) {
     check("search_apartment_trades 실데이터 응답", text.length > 0, text.slice(0, 120));
   } else {

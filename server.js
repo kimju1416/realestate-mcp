@@ -22,6 +22,8 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import express from "express";
 import { z } from "zod";
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -39,6 +41,14 @@ import {
   fmtRentRow,
   filterByName,
   stat,
+  normalizePresale,
+  fmtPresaleRow,
+  normalizeLand,
+  fmtLandRow,
+  normalizeCommercial,
+  fmtCommercialRow,
+  normalizeDetached,
+  fmtDetachedRow,
 } from "./lib.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -47,6 +57,14 @@ const TRADE_BASE = "https://apis.data.go.kr/1613000/RTMSDataSvcAptTradeDev";
 const TRADE_OP = "getRTMSDataSvcAptTradeDev";
 const RENT_BASE = "https://apis.data.go.kr/1613000/RTMSDataSvcAptRent";
 const RENT_OP = "getRTMSDataSvcAptRent";
+const PRESALE_BASE = "https://apis.data.go.kr/1613000/RTMSDataSvcSilvTrade";
+const PRESALE_OP = "getRTMSDataSvcSilvTrade";
+const LAND_BASE = "https://apis.data.go.kr/1613000/RTMSDataSvcLandTrade";
+const LAND_OP = "getRTMSDataSvcLandTrade";
+const COMMERCIAL_BASE = "https://apis.data.go.kr/1613000/RTMSDataSvcNrgTrade";
+const COMMERCIAL_OP = "getRTMSDataSvcNrgTrade";
+const DETACHED_BASE = "https://apis.data.go.kr/1613000/RTMSDataSvcSHTrade";
+const DETACHED_OP = "getRTMSDataSvcSHTrade";
 
 const KEY_GUIDE = [
   "공공데이터포털 인증키가 설정되지 않았습니다. 설정 방법:",
@@ -118,14 +136,57 @@ async function fetchRents(lawdCd, dealMonth, { pageNo = 1, numOfRows = 1000 } = 
   return { rows: items.map(normalizeRent), totalCount };
 }
 
+async function fetchPresale(lawdCd, dealMonth, { pageNo = 1, numOfRows = 1000 } = {}) {
+  const { items, totalCount } = await callApi(PRESALE_BASE, PRESALE_OP, {
+    LAWD_CD: lawdCd,
+    DEAL_YMD: dealMonth,
+    pageNo,
+    numOfRows,
+  });
+  return { rows: items.map(normalizePresale), totalCount };
+}
+
+async function fetchLand(lawdCd, dealMonth, { pageNo = 1, numOfRows = 1000 } = {}) {
+  const { items, totalCount } = await callApi(LAND_BASE, LAND_OP, {
+    LAWD_CD: lawdCd,
+    DEAL_YMD: dealMonth,
+    pageNo,
+    numOfRows,
+  });
+  return { rows: items.map(normalizeLand), totalCount };
+}
+
+async function fetchCommercial(lawdCd, dealMonth, { pageNo = 1, numOfRows = 1000 } = {}) {
+  const { items, totalCount } = await callApi(COMMERCIAL_BASE, COMMERCIAL_OP, {
+    LAWD_CD: lawdCd,
+    DEAL_YMD: dealMonth,
+    pageNo,
+    numOfRows,
+  });
+  return { rows: items.map(normalizeCommercial), totalCount };
+}
+
+async function fetchDetached(lawdCd, dealMonth, { pageNo = 1, numOfRows = 1000 } = {}) {
+  const { items, totalCount } = await callApi(DETACHED_BASE, DETACHED_OP, {
+    LAWD_CD: lawdCd,
+    DEAL_YMD: dealMonth,
+    pageNo,
+    numOfRows,
+  });
+  return { rows: items.map(normalizeDetached), totalCount };
+}
+
 const ok = (text) => ({ content: [{ type: "text", text }] });
 const fail = (e) => ({ content: [{ type: "text", text: `⚠️ ${e.message}` }], isError: true });
 
 // ---------- MCP 서버 ----------
+// HTTP(원격) 모드에서는 요청마다 새 서버 인스턴스를 만들어 세션을 완전히 분리한다(무상태).
+// stdio(로컬) 모드에서는 이 함수를 한 번만 호출해 프로세스 수명 동안 하나의 인스턴스를 쓴다.
 
-const server = new McpServer({ name: "realestate-mcp", version: "0.1.0" });
+function createServer() {
+  const server = new McpServer({ name: "realestate-mcp", version: "0.1.0" });
 
-server.registerTool(
+  server.registerTool(
   "search_apartment_trades",
   {
     title: "아파트 매매 실거래가 조회",
@@ -301,6 +362,233 @@ server.registerTool(
   }
 );
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
-console.error("realestate-mcp 서버 시작됨 (stdio)");
+server.registerTool(
+  "search_presale_trades",
+  {
+    title: "아파트 분양권전매 실거래가 조회",
+    description:
+      "국토교통부 실거래가 자료로 특정 지역·월의 아파트 분양권전매(입주권 포함) 거래 내역을 조회한다. " +
+      "region·dealMonth·apartmentName 사용법은 search_apartment_trades와 동일하다. " +
+      "아직 준공 전인 단지라 건축년도 정보는 없다.",
+    inputSchema: {
+      region: z.string().describe("지역명(시군구, 예: '강남구', '성남시 분당구') 또는 5자리 법정동코드"),
+      dealMonth: z.string().optional().describe("계약년월 YYYYMM (예: '202506'). 생략 시 이번 달"),
+      apartmentName: z.string().optional().describe("아파트 단지명 부분 필터"),
+      page: z.number().int().min(1).optional().describe("페이지 번호 (기본 1)"),
+    },
+  },
+  async ({ region, dealMonth, apartmentName, page }) => {
+    try {
+      const lawdCd = resolveRegion(region);
+      const ym = resolveDealMonth(dealMonth);
+      const { rows, totalCount } = await fetchPresale(lawdCd, ym, { pageNo: page ?? 1 });
+      const filtered = filterByName(rows, apartmentName);
+
+      if (filtered.length === 0) {
+        const hint =
+          totalCount === 0
+            ? ` 해당 월 자료가 아직 없을 수 있습니다. dealMonth를 지난 달(예: ${monthsBefore(ym, 1)})로 지정해보세요.`
+            : "";
+        return ok(`조건에 맞는 분양권전매 거래가 없습니다 (${ym}).${hint}`);
+      }
+
+      filtered.sort((a, b) => (a.계약일 < b.계약일 ? 1 : -1));
+      const header = `[${region} · ${ym}] 아파트 분양권전매 실거래 ${filtered.length}건 (전체 ${totalCount}건 중):`;
+      const note =
+        totalCount > filtered.length && !apartmentName ? `\n\n※ 한 페이지(최대 1000건) 기준. 더 필요하면 page 지정.` : "";
+      return ok(
+        `${header}\n${filtered.slice(0, 50).map(fmtPresaleRow).join("\n")}${
+          filtered.length > 50 ? `\n... 외 ${filtered.length - 50}건` : ""
+        }${note}`
+      );
+    } catch (e) {
+      return fail(e);
+    }
+  }
+);
+
+server.registerTool(
+  "search_land_trades",
+  {
+    title: "토지 매매 실거래가 조회",
+    description:
+      "국토교통부 실거래가 자료로 특정 지역·월의 토지 매매 거래 내역을 조회한다 (지목·용도지역·거래면적 포함). " +
+      "region·dealMonth 사용법은 search_apartment_trades와 동일하다. 단지명 필터는 없다(토지엔 단지명이 없음).",
+    inputSchema: {
+      region: z.string().describe("지역명(시군구, 예: '강남구', '성남시 분당구') 또는 5자리 법정동코드"),
+      dealMonth: z.string().optional().describe("계약년월 YYYYMM (예: '202506'). 생략 시 이번 달"),
+      page: z.number().int().min(1).optional().describe("페이지 번호 (기본 1)"),
+    },
+  },
+  async ({ region, dealMonth, page }) => {
+    try {
+      const lawdCd = resolveRegion(region);
+      const ym = resolveDealMonth(dealMonth);
+      const { rows, totalCount } = await fetchLand(lawdCd, ym, { pageNo: page ?? 1 });
+
+      if (rows.length === 0) {
+        const hint = ` 해당 월 자료가 아직 없을 수 있습니다. dealMonth를 지난 달(예: ${monthsBefore(ym, 1)})로 지정해보세요.`;
+        return ok(`조건에 맞는 토지 매매 거래가 없습니다 (${ym}).${hint}`);
+      }
+
+      rows.sort((a, b) => (a.계약일 < b.계약일 ? 1 : -1));
+      const header = `[${region} · ${ym}] 토지 매매 실거래 ${rows.length}건 (전체 ${totalCount}건 중):`;
+      const note = totalCount > rows.length ? `\n\n※ 한 페이지(최대 1000건) 기준. 더 필요하면 page 지정.` : "";
+      return ok(
+        `${header}\n${rows.slice(0, 50).map(fmtLandRow).join("\n")}${
+          rows.length > 50 ? `\n... 외 ${rows.length - 50}건` : ""
+        }${note}`
+      );
+    } catch (e) {
+      return fail(e);
+    }
+  }
+);
+
+server.registerTool(
+  "search_commercial_trades",
+  {
+    title: "상업업무용 부동산 매매 실거래가 조회",
+    description:
+      "국토교통부 실거래가 자료로 특정 지역·월의 상가·업무용 부동산(근린생활시설 등) 매매 거래 내역을 조회한다 " +
+      "(건물유형·주용도·건물면적·층 포함). region·dealMonth 사용법은 search_apartment_trades와 동일하다. " +
+      "단지명 필터는 없다.",
+    inputSchema: {
+      region: z.string().describe("지역명(시군구, 예: '강남구', '성남시 분당구') 또는 5자리 법정동코드"),
+      dealMonth: z.string().optional().describe("계약년월 YYYYMM (예: '202506'). 생략 시 이번 달"),
+      page: z.number().int().min(1).optional().describe("페이지 번호 (기본 1)"),
+    },
+  },
+  async ({ region, dealMonth, page }) => {
+    try {
+      const lawdCd = resolveRegion(region);
+      const ym = resolveDealMonth(dealMonth);
+      const { rows, totalCount } = await fetchCommercial(lawdCd, ym, { pageNo: page ?? 1 });
+
+      if (rows.length === 0) {
+        const hint = ` 해당 월 자료가 아직 없을 수 있습니다. dealMonth를 지난 달(예: ${monthsBefore(ym, 1)})로 지정해보세요.`;
+        return ok(`조건에 맞는 상업업무용 매매 거래가 없습니다 (${ym}).${hint}`);
+      }
+
+      rows.sort((a, b) => (a.계약일 < b.계약일 ? 1 : -1));
+      const header = `[${region} · ${ym}] 상업업무용 부동산 매매 실거래 ${rows.length}건 (전체 ${totalCount}건 중):`;
+      const note = totalCount > rows.length ? `\n\n※ 한 페이지(최대 1000건) 기준. 더 필요하면 page 지정.` : "";
+      return ok(
+        `${header}\n${rows.slice(0, 50).map(fmtCommercialRow).join("\n")}${
+          rows.length > 50 ? `\n... 외 ${rows.length - 50}건` : ""
+        }${note}`
+      );
+    } catch (e) {
+      return fail(e);
+    }
+  }
+);
+
+server.registerTool(
+  "search_detached_house_trades",
+  {
+    title: "단독/다가구 매매 실거래가 조회",
+    description:
+      "국토교통부 실거래가 자료로 특정 지역·월의 단독·다가구 주택 매매 거래 내역을 조회한다 " +
+      "(대지면적·연면적·건축년도 포함). region·dealMonth 사용법은 search_apartment_trades와 동일하다. " +
+      "단지명 필터는 없다.",
+    inputSchema: {
+      region: z.string().describe("지역명(시군구, 예: '강남구', '성남시 분당구') 또는 5자리 법정동코드"),
+      dealMonth: z.string().optional().describe("계약년월 YYYYMM (예: '202506'). 생략 시 이번 달"),
+      page: z.number().int().min(1).optional().describe("페이지 번호 (기본 1)"),
+    },
+  },
+  async ({ region, dealMonth, page }) => {
+    try {
+      const lawdCd = resolveRegion(region);
+      const ym = resolveDealMonth(dealMonth);
+      const { rows, totalCount } = await fetchDetached(lawdCd, ym, { pageNo: page ?? 1 });
+
+      if (rows.length === 0) {
+        const hint = ` 해당 월 자료가 아직 없을 수 있습니다. dealMonth를 지난 달(예: ${monthsBefore(ym, 1)})로 지정해보세요.`;
+        return ok(`조건에 맞는 단독/다가구 매매 거래가 없습니다 (${ym}).${hint}`);
+      }
+
+      rows.sort((a, b) => (a.계약일 < b.계약일 ? 1 : -1));
+      const header = `[${region} · ${ym}] 단독/다가구 매매 실거래 ${rows.length}건 (전체 ${totalCount}건 중):`;
+      const note = totalCount > rows.length ? `\n\n※ 한 페이지(최대 1000건) 기준. 더 필요하면 page 지정.` : "";
+      return ok(
+        `${header}\n${rows.slice(0, 50).map(fmtDetachedRow).join("\n")}${
+          rows.length > 50 ? `\n... 외 ${rows.length - 50}건` : ""
+        }${note}`
+      );
+    } catch (e) {
+      return fail(e);
+    }
+  }
+  );
+
+  return server;
+}
+
+// ---------- 원격(HTTP) 모드 ----------
+// Render 등에 배포될 때 PORT 환경변수가 설정된다. 이때는 무상태(stateless) StreamableHTTP로
+// 요청마다 새 McpServer+transport를 만들어 세션을 완전히 분리한다(세션 저장소 불필요).
+// 개인 소유 인증키 하나를 불특정 다수가 공유하므로, IP당 분당 요청 수를 아주 단순하게 제한한다.
+
+function createRateLimiter({ windowMs = 60_000, max = 30 } = {}) {
+  const hits = new Map(); // ip -> { count, resetAt }
+  return (req, res, next) => {
+    const ip = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket.remoteAddress || "unknown";
+    const now = Date.now();
+    const rec = hits.get(ip);
+    if (!rec || now > rec.resetAt) {
+      hits.set(ip, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+    rec.count += 1;
+    if (rec.count > max) {
+      res.status(429).json({ error: "요청이 너무 많습니다. 1분 후 다시 시도하세요." });
+      return;
+    }
+    next();
+  };
+}
+
+async function runHttpServer(port) {
+  const app = express();
+  app.use(express.json());
+  app.use("/mcp", createRateLimiter());
+
+  app.get("/", (_req, res) => res.send("realestate-mcp is running"));
+
+  app.post("/mcp", async (req, res) => {
+    try {
+      const server = createServer();
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+      res.on("close", () => {
+        transport.close();
+        server.close();
+      });
+      await server.connect(transport);
+      await transport.handleRequest(req, res, req.body);
+    } catch (e) {
+      console.error("MCP 요청 처리 오류:", e);
+      if (!res.headersSent) {
+        res.status(500).json({ jsonrpc: "2.0", error: { code: -32603, message: "Internal server error" }, id: null });
+      }
+    }
+  });
+
+  // 무상태 모드라 GET(서버→클라 스트림)·DELETE(세션 종료)는 지원하지 않음을 명시적으로 응답
+  app.get("/mcp", (_req, res) => res.status(405).json({ error: "이 서버는 무상태(stateless) 모드입니다." }));
+  app.delete("/mcp", (_req, res) => res.status(405).json({ error: "이 서버는 무상태(stateless) 모드입니다." }));
+
+  app.listen(port, () => {
+    console.error(`realestate-mcp HTTP 서버 시작됨 (port ${port})`);
+  });
+}
+
+if (process.env.PORT) {
+  await runHttpServer(Number(process.env.PORT));
+} else {
+  const server = createServer();
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  console.error("realestate-mcp 서버 시작됨 (stdio)");
+}

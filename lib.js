@@ -187,6 +187,125 @@ export function filterByName(rows, apartmentName) {
   return rows.filter((r) => r.아파트명.replace(/\s+/g, "").includes(kw));
 }
 
+// ---------- 분양권전매 ----------
+
+export function normalizePresale(it) {
+  const dealAmount = cleanAmount(it.dealAmount);
+  const area = cleanArea(it.excluUseAr);
+  return {
+    아파트명: String(it.aptNm ?? "").trim(),
+    법정동: String(it.umdNm ?? "").trim(),
+    지번: String(it.jibun ?? "").trim(),
+    전용면적: area,
+    층: it.floor !== undefined ? Number(it.floor) : undefined,
+    계약일: [it.dealYear, it.dealMonth, it.dealDay].filter(Boolean).join("-"),
+    거래금액만원: dealAmount,
+    평당가만원: Math.round(pyeongPrice(dealAmount, area)) || undefined,
+    권리구분: it.ownershipGbn ? String(it.ownershipGbn).trim() : undefined,
+    해제여부: it.cdealType && String(it.cdealType).trim() ? String(it.cdealType).trim() : undefined,
+  };
+}
+
+export function fmtPresaleRow(row) {
+  const cancel = row.해제여부 ? " [해제됨]" : "";
+  const py = Number.isFinite(row.평당가만원) ? `, 평당 ${fmtManwon(row.평당가만원)}` : "";
+  const right = row.권리구분 ? ` (${row.권리구분})` : "";
+  return (
+    `- ${row.아파트명 || "?"} | ${row.법정동}${row.지번 ? " " + row.지번 : ""} | ` +
+    `전용 ${row.전용면적}㎡ | ${row.층 ?? "?"}층 | 계약 ${row.계약일} | ${fmtManwon(row.거래금액만원)}${py}${right}${cancel}`
+  );
+}
+
+// ---------- 토지 매매 ----------
+
+export function normalizeLand(it) {
+  const dealAmount = cleanAmount(it.dealAmount);
+  const area = cleanArea(it.dealArea);
+  return {
+    법정동: String(it.umdNm ?? "").trim(),
+    지번: String(it.jibun ?? "").trim(),
+    지목: it.jimok ? String(it.jimok).trim() : undefined,
+    용도지역: it.landUse ? String(it.landUse).trim() : undefined,
+    거래면적: area,
+    계약일: [it.dealYear, it.dealMonth, it.dealDay].filter(Boolean).join("-"),
+    거래금액만원: dealAmount,
+    m2당가만원: Math.round(m2Price(dealAmount, area)) || undefined,
+    지분거래: it.shareDealingType && String(it.shareDealingType).trim() ? String(it.shareDealingType).trim() : undefined,
+    해제여부: it.cdealType && String(it.cdealType).trim() ? String(it.cdealType).trim() : undefined,
+  };
+}
+
+export function fmtLandRow(row) {
+  const cancel = row.해제여부 ? " [해제됨]" : "";
+  const m2 = Number.isFinite(row.m2당가만원) ? `, ㎡당 ${fmtManwon(row.m2당가만원)}` : "";
+  const share = row.지분거래 ? ` (지분거래: ${row.지분거래})` : "";
+  return (
+    `- ${row.법정동}${row.지번 ? " " + row.지번 : ""} | ${row.지목 ?? "?"} | ${row.용도지역 ?? "?"} | ` +
+    `거래면적 ${row.거래면적}㎡ | 계약 ${row.계약일} | ${fmtManwon(row.거래금액만원)}${m2}${share}${cancel}`
+  );
+}
+
+// ---------- 상업업무용 부동산 매매 ----------
+
+export function normalizeCommercial(it) {
+  const dealAmount = cleanAmount(it.dealAmount);
+  const area = cleanArea(it.buildingAr);
+  return {
+    법정동: String(it.umdNm ?? "").trim(),
+    지번: String(it.jibun ?? "").trim(),
+    건물유형: it.buildingType ? String(it.buildingType).trim() : undefined,
+    건물주용도: it.buildingUse ? String(it.buildingUse).trim() : undefined,
+    용도지역: it.landUse ? String(it.landUse).trim() : undefined,
+    건물면적: area,
+    층: it.floor !== undefined && String(it.floor).trim() !== "" ? Number(it.floor) : undefined,
+    건축년도: it.buildYear !== undefined && String(it.buildYear).trim() !== "" ? Number(it.buildYear) : undefined,
+    계약일: [it.dealYear, it.dealMonth, it.dealDay].filter(Boolean).join("-"),
+    거래금액만원: dealAmount,
+    m2당가만원: Math.round(m2Price(dealAmount, area)) || undefined,
+    지분거래: it.shareDealingType && String(it.shareDealingType).trim() ? String(it.shareDealingType).trim() : undefined,
+    해제여부: it.cdealType && String(it.cdealType).trim() ? String(it.cdealType).trim() : undefined,
+  };
+}
+
+export function fmtCommercialRow(row) {
+  const cancel = row.해제여부 ? " [해제됨]" : "";
+  const m2 = Number.isFinite(row.m2당가만원) ? `, ㎡당 ${fmtManwon(row.m2당가만원)}` : "";
+  return (
+    `- ${row.법정동}${row.지번 ? " " + row.지번 : ""} | ${row.건물유형 ?? "?"}/${row.건물주용도 ?? "?"} | ` +
+    `건물면적 ${row.건물면적}㎡ | ${row.층 ?? "?"}층 | ${row.건축년도 ?? "?"}년 건축 | ` +
+    `계약 ${row.계약일} | ${fmtManwon(row.거래금액만원)}${m2}${cancel}`
+  );
+}
+
+// ---------- 단독/다가구 매매 ----------
+
+export function normalizeDetached(it) {
+  const dealAmount = cleanAmount(it.dealAmount);
+  const area = cleanArea(it.totalFloorAr);
+  return {
+    법정동: String(it.umdNm ?? "").trim(),
+    지번: String(it.jibun ?? "").trim(),
+    주택유형: it.houseType ? String(it.houseType).trim() : undefined,
+    대지면적: cleanArea(it.plottageAr),
+    연면적: area,
+    건축년도: it.buildYear !== undefined && String(it.buildYear).trim() !== "" ? Number(it.buildYear) : undefined,
+    계약일: [it.dealYear, it.dealMonth, it.dealDay].filter(Boolean).join("-"),
+    거래금액만원: dealAmount,
+    m2당가만원: Math.round(m2Price(dealAmount, area)) || undefined,
+    해제여부: it.cdealType && String(it.cdealType).trim() ? String(it.cdealType).trim() : undefined,
+  };
+}
+
+export function fmtDetachedRow(row) {
+  const cancel = row.해제여부 ? " [해제됨]" : "";
+  const m2 = Number.isFinite(row.m2당가만원) ? `, ㎡당 ${fmtManwon(row.m2당가만원)}` : "";
+  return (
+    `- ${row.법정동}${row.지번 ? " " + row.지번 : ""} | ${row.주택유형 ?? "?"} | ` +
+    `대지 ${row.대지면적}㎡ / 연면적 ${row.연면적}㎡ | ${row.건축년도 ?? "?"}년 건축 | ` +
+    `계약 ${row.계약일} | ${fmtManwon(row.거래금액만원)}${m2}${cancel}`
+  );
+}
+
 // ---------- 통계 ----------
 
 export function stat(arr) {
