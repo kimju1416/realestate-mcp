@@ -187,6 +187,19 @@ export function filterByName(rows, apartmentName) {
   return rows.filter((r) => r.아파트명.replace(/\s+/g, "").includes(kw));
 }
 
+/** 읍/면/동(법정동) 이름 부분 필터. region은 시군구 단위만 지원하므로, 이걸로 동 단위를 좁힌다. */
+export function filterByDong(rows, dong) {
+  if (!dong) return rows;
+  const kw = dong.replace(/\s+/g, "");
+  return rows.filter((r) => r.법정동.replace(/\s+/g, "").includes(kw));
+}
+
+/** 이미 가져온 rows 배열을 로컬에서 pageSize개씩 자른다 (API가 아니라 클라이언트 쪽 페이지네이션). */
+export function paginate(rows, page = 1, pageSize = 50) {
+  const start = (page - 1) * pageSize;
+  return rows.slice(start, start + pageSize);
+}
+
 // ---------- 분양권전매 ----------
 
 export function normalizePresale(it) {

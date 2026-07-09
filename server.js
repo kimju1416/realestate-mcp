@@ -40,6 +40,8 @@ import {
   fmtTradeRow,
   fmtRentRow,
   filterByName,
+  filterByDong,
+  paginate,
   stat,
   normalizePresale,
   fmtPresaleRow,
@@ -194,20 +196,22 @@ function createServer() {
       "국토교통부 실거래가 자료로 특정 지역·월의 아파트 매매 거래 내역을 조회한다. " +
       "region에는 '강남구', '성남시 분당구', '수원시 영통구'처럼 시군구명을 넣거나, " +
       "5자리 법정동코드(LAWD_CD)를 직접 넣어도 된다. dealMonth를 생략하면 이번 달 기준으로 조회한다 " +
-      "(실거래 신고 특성상 최근 1~2개월 자료는 아직 신고 전이라 적거나 없을 수 있음 — 그럴 땐 지난 달을 지정해보라고 안내).",
+      "(실거래 신고 특성상 최근 1~2개월 자료는 아직 신고 전이라 적거나 없을 수 있음 — 그럴 땐 지난 달을 지정해보라고 안내). " +
+      "region은 시군구 단위까지만 구분하므로, 읍/면/동 단위로 더 좁히려면 dong 파라미터를 쓴다.",
     inputSchema: {
       region: z.string().describe("지역명(시군구, 예: '강남구', '성남시 분당구') 또는 5자리 법정동코드"),
       dealMonth: z.string().optional().describe("계약년월 YYYYMM (예: '202506'). 생략 시 이번 달"),
       apartmentName: z.string().optional().describe("아파트 단지명 부분 필터 (예: '래미안')"),
-      page: z.number().int().min(1).optional().describe("페이지 번호 (기본 1)"),
+      dong: z.string().optional().describe("읍/면/동 이름 부분 필터 (예: '봉곡동'). region은 시군구 단위까지만 지원하므로 동 단위로 좁힐 때 사용"),
+      page: z.number().int().min(1).optional().describe("결과 페이지 번호 (한 페이지 50건, 기본 1) — 이미 조회한 결과를 넘겨볼 때 사용"),
     },
   },
-  async ({ region, dealMonth, apartmentName, page }) => {
+  async ({ region, dealMonth, apartmentName, dong, page }) => {
     try {
       const lawdCd = resolveRegion(region);
       const ym = resolveDealMonth(dealMonth);
-      const { rows, totalCount } = await fetchTrades(lawdCd, ym, { pageNo: page ?? 1 });
-      const filtered = filterByName(rows, apartmentName);
+      const { rows, totalCount } = await fetchTrades(lawdCd, ym);
+      const filtered = filterByDong(filterByName(rows, apartmentName), dong);
 
       if (filtered.length === 0) {
         const hint =
@@ -218,14 +222,10 @@ function createServer() {
       }
 
       filtered.sort((a, b) => (a.계약일 < b.계약일 ? 1 : -1));
-      const header = `[${region} · ${ym}] 아파트 매매 실거래 ${filtered.length}건 (전체 ${totalCount}건 중):`;
-      const note =
-        totalCount > filtered.length && !apartmentName ? `\n\n※ 한 페이지(최대 1000건) 기준. 더 필요하면 page 지정.` : "";
-      return ok(
-        `${header}\n${filtered.slice(0, 50).map(fmtTradeRow).join("\n")}${
-          filtered.length > 50 ? `\n... 외 ${filtered.length - 50}건` : ""
-        }${note}`
-      );
+      const pageRows = paginate(filtered, page ?? 1);
+      const header = `[${region}${dong ? " " + dong : ""} · ${ym}] 아파트 매매 실거래 ${filtered.length}건 (전체 ${totalCount}건 중):`;
+      const note = filtered.length > 50 ? `\n\n※ ${(page ?? 1)}페이지(50건) 표시. 더 필요하면 page 지정.` : "";
+      return ok(`${header}\n${pageRows.map(fmtTradeRow).join("\n")}${note}`);
     } catch (e) {
       return fail(e);
     }
@@ -238,20 +238,21 @@ server.registerTool(
     title: "아파트 전월세 실거래가 조회",
     description:
       "국토교통부 실거래가 자료로 특정 지역·월의 아파트 전월세(전세/월세) 거래 내역을 조회한다. " +
-      "region·dealMonth·apartmentName 사용법은 search_apartment_trades와 동일하다.",
+      "region·dealMonth·apartmentName·dong 사용법은 search_apartment_trades와 동일하다.",
     inputSchema: {
       region: z.string().describe("지역명(시군구, 예: '강남구', '성남시 분당구') 또는 5자리 법정동코드"),
       dealMonth: z.string().optional().describe("계약년월 YYYYMM (예: '202506'). 생략 시 이번 달"),
       apartmentName: z.string().optional().describe("아파트 단지명 부분 필터"),
-      page: z.number().int().min(1).optional().describe("페이지 번호 (기본 1)"),
+      dong: z.string().optional().describe("읍/면/동 이름 부분 필터 (예: '봉곡동'). region은 시군구 단위까지만 지원하므로 동 단위로 좁힐 때 사용"),
+      page: z.number().int().min(1).optional().describe("결과 페이지 번호 (한 페이지 50건, 기본 1) — 이미 조회한 결과를 넘겨볼 때 사용"),
     },
   },
-  async ({ region, dealMonth, apartmentName, page }) => {
+  async ({ region, dealMonth, apartmentName, dong, page }) => {
     try {
       const lawdCd = resolveRegion(region);
       const ym = resolveDealMonth(dealMonth);
-      const { rows, totalCount } = await fetchRents(lawdCd, ym, { pageNo: page ?? 1 });
-      const filtered = filterByName(rows, apartmentName);
+      const { rows, totalCount } = await fetchRents(lawdCd, ym);
+      const filtered = filterByDong(filterByName(rows, apartmentName), dong);
 
       if (filtered.length === 0) {
         const hint =
@@ -262,14 +263,10 @@ server.registerTool(
       }
 
       filtered.sort((a, b) => (a.계약일 < b.계약일 ? 1 : -1));
-      const header = `[${region} · ${ym}] 아파트 전월세 실거래 ${filtered.length}건 (전체 ${totalCount}건 중):`;
-      const note =
-        totalCount > filtered.length && !apartmentName ? `\n\n※ 한 페이지(최대 1000건) 기준. 더 필요하면 page 지정.` : "";
-      return ok(
-        `${header}\n${filtered.slice(0, 50).map(fmtRentRow).join("\n")}${
-          filtered.length > 50 ? `\n... 외 ${filtered.length - 50}건` : ""
-        }${note}`
-      );
+      const pageRows = paginate(filtered, page ?? 1);
+      const header = `[${region}${dong ? " " + dong : ""} · ${ym}] 아파트 전월세 실거래 ${filtered.length}건 (전체 ${totalCount}건 중):`;
+      const note = filtered.length > 50 ? `\n\n※ ${(page ?? 1)}페이지(50건) 표시. 더 필요하면 page 지정.` : "";
+      return ok(`${header}\n${pageRows.map(fmtRentRow).join("\n")}${note}`);
     } catch (e) {
       return fail(e);
     }
@@ -296,10 +293,11 @@ server.registerTool(
         .describe("기준월 포함 최근 몇 개월을 합산할지 (기본 1, 최대 3 — 과도한 호출 방지)"),
       dealType: z.enum(["trade", "rent"]).optional().describe("'trade'(매매, 기본) 또는 'rent'(전월세)"),
       apartmentName: z.string().optional().describe("특정 단지만 집계하고 싶을 때 부분 필터"),
+      dong: z.string().optional().describe("읍/면/동 이름 부분 필터 (예: '봉곡동'). region은 시군구 단위까지만 지원하므로 동 단위로 좁힐 때 사용"),
       groupBy: z.enum(["overall", "apartment"]).optional().describe("집계 단위: 'overall'(전체, 기본) 또는 'apartment'(단지별)"),
     },
   },
-  async ({ region, dealMonth, recentMonths, dealType, apartmentName, groupBy }) => {
+  async ({ region, dealMonth, recentMonths, dealType, apartmentName, dong, groupBy }) => {
     try {
       const lawdCd = resolveRegion(region);
       const baseYm = resolveDealMonth(dealMonth);
@@ -313,14 +311,14 @@ server.registerTool(
         const { rows } = await fetcher(lawdCd, ym, { pageNo: 1, numOfRows: 1000 });
         all.push(...rows);
       }
-      all = filterByName(all, apartmentName);
+      all = filterByDong(filterByName(all, apartmentName), dong);
 
       const amountOf = (r) => (type === "rent" ? r.보증금만원 : r.거래금액만원);
       const usable = all.filter((r) => Number.isFinite(amountOf(r)) && amountOf(r) > 0);
 
       if (usable.length === 0) {
         return ok(
-          `[${region}] 집계할 데이터가 없습니다 (${baseYm} 기준 최근 ${months}개월, ${
+          `[${region}${dong ? " " + dong : ""}] 집계할 데이터가 없습니다 (${baseYm} 기준 최근 ${months}개월, ${
             type === "rent" ? "전월세" : "매매"
           }). 다른 달이나 인접 개월을 지정해보세요.`
         );
@@ -354,7 +352,7 @@ server.registerTool(
       const unit = groupBy === "apartment" ? "단지별" : "전체";
       const period = months > 1 ? `${monthsBefore(baseYm, months - 1)}~${baseYm}` : baseYm;
       return ok(
-        `[${region}] ${period} ${type === "rent" ? "전월세(보증금 기준)" : "매매"} ${unit} 시세 (${label}):\n${lines.join("\n")}`
+        `[${region}${dong ? " " + dong : ""}] ${period} ${type === "rent" ? "전월세(보증금 기준)" : "매매"} ${unit} 시세 (${label}):\n${lines.join("\n")}`
       );
     } catch (e) {
       return fail(e);
@@ -368,21 +366,22 @@ server.registerTool(
     title: "아파트 분양권전매 실거래가 조회",
     description:
       "국토교통부 실거래가 자료로 특정 지역·월의 아파트 분양권전매(입주권 포함) 거래 내역을 조회한다. " +
-      "region·dealMonth·apartmentName 사용법은 search_apartment_trades와 동일하다. " +
+      "region·dealMonth·apartmentName·dong 사용법은 search_apartment_trades와 동일하다. " +
       "아직 준공 전인 단지라 건축년도 정보는 없다.",
     inputSchema: {
       region: z.string().describe("지역명(시군구, 예: '강남구', '성남시 분당구') 또는 5자리 법정동코드"),
       dealMonth: z.string().optional().describe("계약년월 YYYYMM (예: '202506'). 생략 시 이번 달"),
       apartmentName: z.string().optional().describe("아파트 단지명 부분 필터"),
-      page: z.number().int().min(1).optional().describe("페이지 번호 (기본 1)"),
+      dong: z.string().optional().describe("읍/면/동 이름 부분 필터 (예: '봉곡동'). region은 시군구 단위까지만 지원하므로 동 단위로 좁힐 때 사용"),
+      page: z.number().int().min(1).optional().describe("결과 페이지 번호 (한 페이지 50건, 기본 1) — 이미 조회한 결과를 넘겨볼 때 사용"),
     },
   },
-  async ({ region, dealMonth, apartmentName, page }) => {
+  async ({ region, dealMonth, apartmentName, dong, page }) => {
     try {
       const lawdCd = resolveRegion(region);
       const ym = resolveDealMonth(dealMonth);
-      const { rows, totalCount } = await fetchPresale(lawdCd, ym, { pageNo: page ?? 1 });
-      const filtered = filterByName(rows, apartmentName);
+      const { rows, totalCount } = await fetchPresale(lawdCd, ym);
+      const filtered = filterByDong(filterByName(rows, apartmentName), dong);
 
       if (filtered.length === 0) {
         const hint =
@@ -393,14 +392,10 @@ server.registerTool(
       }
 
       filtered.sort((a, b) => (a.계약일 < b.계약일 ? 1 : -1));
-      const header = `[${region} · ${ym}] 아파트 분양권전매 실거래 ${filtered.length}건 (전체 ${totalCount}건 중):`;
-      const note =
-        totalCount > filtered.length && !apartmentName ? `\n\n※ 한 페이지(최대 1000건) 기준. 더 필요하면 page 지정.` : "";
-      return ok(
-        `${header}\n${filtered.slice(0, 50).map(fmtPresaleRow).join("\n")}${
-          filtered.length > 50 ? `\n... 외 ${filtered.length - 50}건` : ""
-        }${note}`
-      );
+      const pageRows = paginate(filtered, page ?? 1);
+      const header = `[${region}${dong ? " " + dong : ""} · ${ym}] 아파트 분양권전매 실거래 ${filtered.length}건 (전체 ${totalCount}건 중):`;
+      const note = filtered.length > 50 ? `\n\n※ ${(page ?? 1)}페이지(50건) 표시. 더 필요하면 page 지정.` : "";
+      return ok(`${header}\n${pageRows.map(fmtPresaleRow).join("\n")}${note}`);
     } catch (e) {
       return fail(e);
     }
@@ -413,32 +408,32 @@ server.registerTool(
     title: "토지 매매 실거래가 조회",
     description:
       "국토교통부 실거래가 자료로 특정 지역·월의 토지 매매 거래 내역을 조회한다 (지목·용도지역·거래면적 포함). " +
-      "region·dealMonth 사용법은 search_apartment_trades와 동일하다. 단지명 필터는 없다(토지엔 단지명이 없음).",
+      "region·dealMonth 사용법은 search_apartment_trades와 동일하다. 단지명 필터는 없다(토지엔 단지명이 없음). " +
+      "region은 시군구 단위까지만 구분하므로, 읍/면/동 단위로 더 좁히려면 dong 파라미터를 쓴다.",
     inputSchema: {
       region: z.string().describe("지역명(시군구, 예: '강남구', '성남시 분당구') 또는 5자리 법정동코드"),
       dealMonth: z.string().optional().describe("계약년월 YYYYMM (예: '202506'). 생략 시 이번 달"),
-      page: z.number().int().min(1).optional().describe("페이지 번호 (기본 1)"),
+      dong: z.string().optional().describe("읍/면/동 이름 부분 필터 (예: '봉곡동'). region은 시군구 단위까지만 지원하므로 동 단위로 좁힐 때 사용"),
+      page: z.number().int().min(1).optional().describe("결과 페이지 번호 (한 페이지 50건, 기본 1) — 이미 조회한 결과를 넘겨볼 때 사용"),
     },
   },
-  async ({ region, dealMonth, page }) => {
+  async ({ region, dealMonth, dong, page }) => {
     try {
       const lawdCd = resolveRegion(region);
       const ym = resolveDealMonth(dealMonth);
-      const { rows, totalCount } = await fetchLand(lawdCd, ym, { pageNo: page ?? 1 });
+      const { rows, totalCount } = await fetchLand(lawdCd, ym);
+      const filtered = filterByDong(rows, dong);
 
-      if (rows.length === 0) {
+      if (filtered.length === 0) {
         const hint = ` 해당 월 자료가 아직 없을 수 있습니다. dealMonth를 지난 달(예: ${monthsBefore(ym, 1)})로 지정해보세요.`;
-        return ok(`조건에 맞는 토지 매매 거래가 없습니다 (${ym}).${hint}`);
+        return ok(`조건에 맞는 토지 매매 거래가 없습니다 (${ym}).${dong && totalCount > 0 ? "" : hint}`);
       }
 
-      rows.sort((a, b) => (a.계약일 < b.계약일 ? 1 : -1));
-      const header = `[${region} · ${ym}] 토지 매매 실거래 ${rows.length}건 (전체 ${totalCount}건 중):`;
-      const note = totalCount > rows.length ? `\n\n※ 한 페이지(최대 1000건) 기준. 더 필요하면 page 지정.` : "";
-      return ok(
-        `${header}\n${rows.slice(0, 50).map(fmtLandRow).join("\n")}${
-          rows.length > 50 ? `\n... 외 ${rows.length - 50}건` : ""
-        }${note}`
-      );
+      filtered.sort((a, b) => (a.계약일 < b.계약일 ? 1 : -1));
+      const pageRows = paginate(filtered, page ?? 1);
+      const header = `[${region}${dong ? " " + dong : ""} · ${ym}] 토지 매매 실거래 ${filtered.length}건 (전체 ${totalCount}건 중):`;
+      const note = filtered.length > 50 ? `\n\n※ ${(page ?? 1)}페이지(50건) 표시. 더 필요하면 page 지정.` : "";
+      return ok(`${header}\n${pageRows.map(fmtLandRow).join("\n")}${note}`);
     } catch (e) {
       return fail(e);
     }
@@ -452,32 +447,31 @@ server.registerTool(
     description:
       "국토교통부 실거래가 자료로 특정 지역·월의 상가·업무용 부동산(근린생활시설 등) 매매 거래 내역을 조회한다 " +
       "(건물유형·주용도·건물면적·층 포함). region·dealMonth 사용법은 search_apartment_trades와 동일하다. " +
-      "단지명 필터는 없다.",
+      "단지명 필터는 없다. region은 시군구 단위까지만 구분하므로, 읍/면/동 단위로 더 좁히려면 dong 파라미터를 쓴다.",
     inputSchema: {
       region: z.string().describe("지역명(시군구, 예: '강남구', '성남시 분당구') 또는 5자리 법정동코드"),
       dealMonth: z.string().optional().describe("계약년월 YYYYMM (예: '202506'). 생략 시 이번 달"),
-      page: z.number().int().min(1).optional().describe("페이지 번호 (기본 1)"),
+      dong: z.string().optional().describe("읍/면/동 이름 부분 필터 (예: '봉곡동'). region은 시군구 단위까지만 지원하므로 동 단위로 좁힐 때 사용"),
+      page: z.number().int().min(1).optional().describe("결과 페이지 번호 (한 페이지 50건, 기본 1) — 이미 조회한 결과를 넘겨볼 때 사용"),
     },
   },
-  async ({ region, dealMonth, page }) => {
+  async ({ region, dealMonth, dong, page }) => {
     try {
       const lawdCd = resolveRegion(region);
       const ym = resolveDealMonth(dealMonth);
-      const { rows, totalCount } = await fetchCommercial(lawdCd, ym, { pageNo: page ?? 1 });
+      const { rows, totalCount } = await fetchCommercial(lawdCd, ym);
+      const filtered = filterByDong(rows, dong);
 
-      if (rows.length === 0) {
+      if (filtered.length === 0) {
         const hint = ` 해당 월 자료가 아직 없을 수 있습니다. dealMonth를 지난 달(예: ${monthsBefore(ym, 1)})로 지정해보세요.`;
-        return ok(`조건에 맞는 상업업무용 매매 거래가 없습니다 (${ym}).${hint}`);
+        return ok(`조건에 맞는 상업업무용 매매 거래가 없습니다 (${ym}).${dong && totalCount > 0 ? "" : hint}`);
       }
 
-      rows.sort((a, b) => (a.계약일 < b.계약일 ? 1 : -1));
-      const header = `[${region} · ${ym}] 상업업무용 부동산 매매 실거래 ${rows.length}건 (전체 ${totalCount}건 중):`;
-      const note = totalCount > rows.length ? `\n\n※ 한 페이지(최대 1000건) 기준. 더 필요하면 page 지정.` : "";
-      return ok(
-        `${header}\n${rows.slice(0, 50).map(fmtCommercialRow).join("\n")}${
-          rows.length > 50 ? `\n... 외 ${rows.length - 50}건` : ""
-        }${note}`
-      );
+      filtered.sort((a, b) => (a.계약일 < b.계약일 ? 1 : -1));
+      const pageRows = paginate(filtered, page ?? 1);
+      const header = `[${region}${dong ? " " + dong : ""} · ${ym}] 상업업무용 부동산 매매 실거래 ${filtered.length}건 (전체 ${totalCount}건 중):`;
+      const note = filtered.length > 50 ? `\n\n※ ${(page ?? 1)}페이지(50건) 표시. 더 필요하면 page 지정.` : "";
+      return ok(`${header}\n${pageRows.map(fmtCommercialRow).join("\n")}${note}`);
     } catch (e) {
       return fail(e);
     }
@@ -491,32 +485,31 @@ server.registerTool(
     description:
       "국토교통부 실거래가 자료로 특정 지역·월의 단독·다가구 주택 매매 거래 내역을 조회한다 " +
       "(대지면적·연면적·건축년도 포함). region·dealMonth 사용법은 search_apartment_trades와 동일하다. " +
-      "단지명 필터는 없다.",
+      "단지명 필터는 없다. region은 시군구 단위까지만 구분하므로, 읍/면/동 단위로 더 좁히려면 dong 파라미터를 쓴다.",
     inputSchema: {
       region: z.string().describe("지역명(시군구, 예: '강남구', '성남시 분당구') 또는 5자리 법정동코드"),
       dealMonth: z.string().optional().describe("계약년월 YYYYMM (예: '202506'). 생략 시 이번 달"),
-      page: z.number().int().min(1).optional().describe("페이지 번호 (기본 1)"),
+      dong: z.string().optional().describe("읍/면/동 이름 부분 필터 (예: '봉곡동'). region은 시군구 단위까지만 지원하므로 동 단위로 좁힐 때 사용"),
+      page: z.number().int().min(1).optional().describe("결과 페이지 번호 (한 페이지 50건, 기본 1) — 이미 조회한 결과를 넘겨볼 때 사용"),
     },
   },
-  async ({ region, dealMonth, page }) => {
+  async ({ region, dealMonth, dong, page }) => {
     try {
       const lawdCd = resolveRegion(region);
       const ym = resolveDealMonth(dealMonth);
-      const { rows, totalCount } = await fetchDetached(lawdCd, ym, { pageNo: page ?? 1 });
+      const { rows, totalCount } = await fetchDetached(lawdCd, ym);
+      const filtered = filterByDong(rows, dong);
 
-      if (rows.length === 0) {
+      if (filtered.length === 0) {
         const hint = ` 해당 월 자료가 아직 없을 수 있습니다. dealMonth를 지난 달(예: ${monthsBefore(ym, 1)})로 지정해보세요.`;
-        return ok(`조건에 맞는 단독/다가구 매매 거래가 없습니다 (${ym}).${hint}`);
+        return ok(`조건에 맞는 단독/다가구 매매 거래가 없습니다 (${ym}).${dong && totalCount > 0 ? "" : hint}`);
       }
 
-      rows.sort((a, b) => (a.계약일 < b.계약일 ? 1 : -1));
-      const header = `[${region} · ${ym}] 단독/다가구 매매 실거래 ${rows.length}건 (전체 ${totalCount}건 중):`;
-      const note = totalCount > rows.length ? `\n\n※ 한 페이지(최대 1000건) 기준. 더 필요하면 page 지정.` : "";
-      return ok(
-        `${header}\n${rows.slice(0, 50).map(fmtDetachedRow).join("\n")}${
-          rows.length > 50 ? `\n... 외 ${rows.length - 50}건` : ""
-        }${note}`
-      );
+      filtered.sort((a, b) => (a.계약일 < b.계약일 ? 1 : -1));
+      const pageRows = paginate(filtered, page ?? 1);
+      const header = `[${region}${dong ? " " + dong : ""} · ${ym}] 단독/다가구 매매 실거래 ${filtered.length}건 (전체 ${totalCount}건 중):`;
+      const note = filtered.length > 50 ? `\n\n※ ${(page ?? 1)}페이지(50건) 표시. 더 필요하면 page 지정.` : "";
+      return ok(`${header}\n${pageRows.map(fmtDetachedRow).join("\n")}${note}`);
     } catch (e) {
       return fail(e);
     }
