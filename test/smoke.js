@@ -10,7 +10,7 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveRegion } from "../lawd-codes.js";
+import { resolveRegion, resolveRegionCodes } from "../lawd-codes.js";
 import {
   resolveDealMonth,
   monthsBefore,
@@ -44,7 +44,31 @@ check("resolveRegion 5자리 코드 그대로 통과", resolveRegion("11680") ==
 check("resolveRegion 단일 구 매칭('강남구')", resolveRegion("강남구") === "11680");
 check("resolveRegion 다어절 매칭('성남시 분당구')", resolveRegion("성남시 분당구") === "41135");
 check("resolveRegion 다어절 매칭('수원시 영통구')", resolveRegion("수원시 영통구") === "41117");
-check("resolveRegion 완전일치 우선('경기도 수원시')", resolveRegion("경기도 수원시") === "41110");
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+check("resolveRegionCodes 시 전체('수원시') → 하위 구 4곳", same(resolveRegionCodes("수원시"), ["41111", "41113", "41115", "41117"]));
+check("resolveRegionCodes 시 전체('경기도 화성시') → 하위 구 4곳", same(resolveRegionCodes("경기도 화성시"), ["41591", "41593", "41595", "41597"]));
+check("resolveRegionCodes 시 전체 코드(41110) → 하위 구", resolveRegionCodes("41110").length === 4);
+check("resolveRegion 개편 코드: 춘천시 → 51110", resolveRegion("춘천시") === "51110");
+check("resolveRegion 개편 코드: 광주 광산구 → 12330", resolveRegion("광주 광산구") === "12330");
+check("resolveRegion 옛 시도명: 광주광역시 광산구 → 12330", resolveRegion("광주광역시 광산구") === "12330");
+check("resolveRegion 개편 코드: 화성시 동탄구 → 41597", resolveRegion("화성시 동탄구") === "41597");
+check("resolveRegion 개편 코드: 검단구 → 28290", resolveRegion("검단구") === "28290");
+check("resolveRegion 개편 코드: 군위군 → 27720", resolveRegion("군위군") === "27720");
+check("resolveRegion 개편 코드: 전주시 완산구 → 52111", resolveRegion("전주시 완산구") === "52111");
+check("resolveRegion 옛 코드 자동 변환(42110 → 51110)", resolveRegion("42110") === "51110");
+check("resolveRegion 옛 코드 자동 변환(46130 → 12130)", resolveRegion("46130") === "12130");
+try {
+  resolveRegion("수원시");
+  check("resolveRegion 시 전체는 구 지정 안내", false);
+} catch (e) {
+  check("resolveRegion 시 전체는 구 지정 안내", /구를 지정/.test(e.message));
+}
+try {
+  resolveRegionCodes("28110");
+  check("폐지 코드(인천 중구 28110) 안내", false);
+} catch (e) {
+  check("폐지 코드(인천 중구 28110) 안내", /제물포구/.test(e.message));
+}
 
 try {
   resolveRegion("중구"); // 서울/부산/대구/인천/대전/울산 6곳 존재 → 모호해야 함

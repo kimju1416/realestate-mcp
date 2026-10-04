@@ -28,7 +28,7 @@ import { z } from "zod";
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveRegion } from "./lawd-codes.js";
+import { resolveRegionCodes } from "./lawd-codes.js";
 import {
   parseApiResponse,
   resolveDealMonth,
@@ -178,6 +178,19 @@ async function fetchDetached(lawdCd, dealMonth, { pageNo = 1, numOfRows = 1000 }
   return { rows: items.map(normalizeDetached), totalCount };
 }
 
+// "수원시"처럼 여러 구로 나뉘는 지역은 구마다 순차 조회해 합친다
+// (공공데이터포털은 동시 요청이 많으면 막히므로 병렬로 쏘지 않는다).
+async function fetchAcross(fetcher, lawdCds, dealMonth, opts) {
+  const rows = [];
+  let totalCount = 0;
+  for (const cd of lawdCds) {
+    const r = await fetcher(cd, dealMonth, opts);
+    rows.push(...r.rows);
+    totalCount += r.totalCount;
+  }
+  return { rows, totalCount };
+}
+
 const ok = (text) => ({ content: [{ type: "text", text }] });
 const fail = (e) => ({ content: [{ type: "text", text: `⚠️ ${e.message}` }], isError: true });
 
@@ -195,7 +208,7 @@ function createServer() {
     description:
       "국토교통부 실거래가 자료로 특정 지역·월의 아파트 매매 거래 내역을 조회한다. " +
       "region에는 '강남구', '성남시 분당구', '수원시 영통구'처럼 시군구명을 넣거나, " +
-      "5자리 법정동코드(LAWD_CD)를 직접 넣어도 된다. dealMonth를 생략하면 이번 달 기준으로 조회한다 " +
+      "5자리 법정동코드(LAWD_CD)를 직접 넣어도 된다. '수원시'·'화성시'처럼 일반구가 있는 시만 주면 하위 구를 모두 조회해 합친다. dealMonth를 생략하면 이번 달 기준으로 조회한다 " +
       "(실거래 신고 특성상 최근 1~2개월 자료는 아직 신고 전이라 적거나 없을 수 있음 — 그럴 땐 지난 달을 지정해보라고 안내). " +
       "region은 시군구 단위까지만 구분하므로, 읍/면/동 단위로 더 좁히려면 dong 파라미터를 쓴다.",
     inputSchema: {
@@ -208,9 +221,9 @@ function createServer() {
   },
   async ({ region, dealMonth, apartmentName, dong, page }) => {
     try {
-      const lawdCd = resolveRegion(region);
+      const lawdCds = resolveRegionCodes(region);
       const ym = resolveDealMonth(dealMonth);
-      const { rows, totalCount } = await fetchTrades(lawdCd, ym);
+      const { rows, totalCount } = await fetchAcross(fetchTrades, lawdCds, ym);
       const filtered = filterByDong(filterByName(rows, apartmentName), dong);
 
       if (filtered.length === 0) {
@@ -249,9 +262,9 @@ server.registerTool(
   },
   async ({ region, dealMonth, apartmentName, dong, page }) => {
     try {
-      const lawdCd = resolveRegion(region);
+      const lawdCds = resolveRegionCodes(region);
       const ym = resolveDealMonth(dealMonth);
-      const { rows, totalCount } = await fetchRents(lawdCd, ym);
+      const { rows, totalCount } = await fetchAcross(fetchRents, lawdCds, ym);
       const filtered = filterByDong(filterByName(rows, apartmentName), dong);
 
       if (filtered.length === 0) {
@@ -299,7 +312,7 @@ server.registerTool(
   },
   async ({ region, dealMonth, recentMonths, dealType, apartmentName, dong, groupBy }) => {
     try {
-      const lawdCd = resolveRegion(region);
+      const lawdCds = resolveRegionCodes(region);
       const baseYm = resolveDealMonth(dealMonth);
       const months = recentMonths ?? 1;
       const type = dealType ?? "trade";
@@ -308,7 +321,7 @@ server.registerTool(
       let all = [];
       for (let i = 0; i < months; i++) {
         const ym = monthsBefore(baseYm, i);
-        const { rows } = await fetcher(lawdCd, ym, { pageNo: 1, numOfRows: 1000 });
+        const { rows } = await fetchAcross(fetcher, lawdCds, ym, { pageNo: 1, numOfRows: 1000 });
         all.push(...rows);
       }
       all = filterByDong(filterByName(all, apartmentName), dong);
@@ -378,9 +391,9 @@ server.registerTool(
   },
   async ({ region, dealMonth, apartmentName, dong, page }) => {
     try {
-      const lawdCd = resolveRegion(region);
+      const lawdCds = resolveRegionCodes(region);
       const ym = resolveDealMonth(dealMonth);
-      const { rows, totalCount } = await fetchPresale(lawdCd, ym);
+      const { rows, totalCount } = await fetchAcross(fetchPresale, lawdCds, ym);
       const filtered = filterByDong(filterByName(rows, apartmentName), dong);
 
       if (filtered.length === 0) {
@@ -419,9 +432,9 @@ server.registerTool(
   },
   async ({ region, dealMonth, dong, page }) => {
     try {
-      const lawdCd = resolveRegion(region);
+      const lawdCds = resolveRegionCodes(region);
       const ym = resolveDealMonth(dealMonth);
-      const { rows, totalCount } = await fetchLand(lawdCd, ym);
+      const { rows, totalCount } = await fetchAcross(fetchLand, lawdCds, ym);
       const filtered = filterByDong(rows, dong);
 
       if (filtered.length === 0) {
@@ -457,9 +470,9 @@ server.registerTool(
   },
   async ({ region, dealMonth, dong, page }) => {
     try {
-      const lawdCd = resolveRegion(region);
+      const lawdCds = resolveRegionCodes(region);
       const ym = resolveDealMonth(dealMonth);
-      const { rows, totalCount } = await fetchCommercial(lawdCd, ym);
+      const { rows, totalCount } = await fetchAcross(fetchCommercial, lawdCds, ym);
       const filtered = filterByDong(rows, dong);
 
       if (filtered.length === 0) {
@@ -495,9 +508,9 @@ server.registerTool(
   },
   async ({ region, dealMonth, dong, page }) => {
     try {
-      const lawdCd = resolveRegion(region);
+      const lawdCds = resolveRegionCodes(region);
       const ym = resolveDealMonth(dealMonth);
-      const { rows, totalCount } = await fetchDetached(lawdCd, ym);
+      const { rows, totalCount } = await fetchAcross(fetchDetached, lawdCds, ym);
       const filtered = filterByDong(rows, dong);
 
       if (filtered.length === 0) {
